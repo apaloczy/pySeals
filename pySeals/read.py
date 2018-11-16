@@ -16,8 +16,10 @@ __all__ = ['load_timesubset',
            'strip_profile']
 
 
-def load_timesubset(tstart, tend, path=_dbpath, interpolated=True, adjusted=True,
-                    qc=True, mask_qcflags=[9], which_vars=['PRES', 'JULD', 'TEMP', 'PSAL']):
+def load_timesubset(tstart, tend, concatenate=False, path=_dbpath, interpolated=True,
+                    adjusted=True, qc=True, mask_qcflags=[9],
+                    which_vars=['PRES', 'JULD', 'TEMP', 'PSAL']):
+    ts, te = tstart, tend
     tstart = Timestamp(tstart).to_pydatetime()
     tend = Timestamp(tend).to_pydatetime()
     kwload = dict(varnames=which_vars, adjusted=adjusted, qc=qc, mask_qcflags=mask_qcflags)
@@ -28,6 +30,7 @@ def load_timesubset(tstart, tend, path=_dbpath, interpolated=True, adjusted=True
 
     DS = None
     cdirs = [d.rstrip('/') for d in glob(path+'*/')]
+    ntags = 0
     for cdir in cdirs:
         fglob = cdir + '/DATA_ncARGO%s/*.nc'%intrp
         fnames = glob(fglob)
@@ -37,14 +40,27 @@ def load_timesubset(tstart, tend, path=_dbpath, interpolated=True, adjusted=True
             t = np.array([Timestamp(tn).to_pydatetime() for tn in ds['JULD'].values])
             ftime = np.logical_and(t>tstart, t<tend)
             if ftime.any(): # Subset of tag is in desired time.
+                ntags+=1
                 c1 = fname.split('/')
                 c1, c2 = c1[-1], c1[-3]
                 print("Loading tag " + c1 + ' ('+c2+')')
                 ds = strip_profile(ds, **kwload)
-                if DS is None:
-                    DS = ds
-                else:
-                    DS = concat((DS, ds), dim='N_PROF')
+
+                if concatenate: # Concatenate all matching tags in a single section.
+                    if DS is None:
+                        DS = ds
+                    else:
+                        DS = concat((DS, ds), dim='N_PROF')
+                else: # Add tag as a dictionary entry.
+                    tag = fname.split('/')[-1].split('_')[0]
+                    if DS is None:
+                        DS = {tag:ds}
+                    else:
+                        DS.update({tag:ds})
+
+    print("")
+    print("Found %d tags between %s and %s."%(ntags, ts, te))
+
 
     return DS
 
