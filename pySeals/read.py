@@ -61,8 +61,8 @@ def load_timesubset(tstart, tend, concatenate=False, path=_dbpath, interpolated=
     print("")
     print("Found %d tags between %s and %s."%(ntags, ts, te))
 
-
     return DS
+
 
 def strip_profile(ds, varnames=['PRES', 'TEMP', 'PSAL'], adjusted=True, qc=True, mask_qcflags=[9]):
     """
@@ -87,8 +87,13 @@ def strip_profile(ds, varnames=['PRES', 'TEMP', 'PSAL'], adjusted=True, qc=True,
         if v not in keep:
             ds = ds.drop(v)
 
+    # Apply the specified QC tag(s).
     if qc:
-        qcflags = v + '_QC'
+        qcarr = v + '_QC'
+        k = [a for a in ds.data_vars.keys() if '_QC' not in a]
+        for v in k:
+            for qctag in mask_qcflags:
+                ds[v] = ds[v].where(ds[qcarr]!=qctag)
 
     if adjusted:
         presvar = 'PRES_ADJUSTED'

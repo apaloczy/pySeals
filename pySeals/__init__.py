@@ -1,10 +1,12 @@
 __version__ = '0.0.1a'
+_dbpath = __path__[0] + '/path.cfg'
 
-_dbpath = "/home/andre/Downloads/MEOP-CTD_2018-04-10/"
+with open(_dbpath) as f:
+    _dbpath = f.readlines()[0].strip()
 
-# _dbpath = __path__[0] + '/path.cfg'
 
+__all__ = ['load_timesubset',
+           'strip_profile']
 
-__all__ = ['load_timesubset']
-
-from .read import (load_timesubset)
+from .read import (load_timesubset,
+                   strip_profile)
