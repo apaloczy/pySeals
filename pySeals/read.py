@@ -7,18 +7,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from glob import glob
 from datetime import datetime
-from xarray import open_dataset, concat
+from xarray import open_dataset, concat, Variable, Dataset
 from pandas import Timestamp
 
-from . import _dbpath
-
-__all__ = ['load_timesubset',
+__all__ = ['load_subset',
            'strip_profile']
 
 
-def load_timesubset(tstart, tend, concatenate=False, path=_dbpath, interpolated=True,
-                    adjusted=True, qc=True, mask_qcflags=[9],
-                    which_vars=['PRES', 'JULD', 'TEMP', 'PSAL']):
+def load_subset(tstart, tend, bbox=None, path='', concatenate=True, interpolated=False,
+                adjusted=True, qc=True, mask_qcflags=[9],
+                which_vars=['PRES', 'JULD', 'TEMP', 'PSAL']):
     ts, te = tstart, tend
     tstart = Timestamp(tstart).to_pydatetime()
     tend = Timestamp(tend).to_pydatetime()
@@ -29,7 +27,7 @@ def load_timesubset(tstart, tend, concatenate=False, path=_dbpath, interpolated=
         intrp = ""
 
     DS = None
-    cdirs = [d.rstrip('/') for d in glob(path+'*/')]
+    cdirs = [d.rstrip('/') for d in glob(path+'/*/')] # Get all country data directories.
     ntags = 0
     for cdir in cdirs:
         fglob = cdir + '/DATA_ncARGO%s/*.nc'%intrp
@@ -37,29 +35,61 @@ def load_timesubset(tstart, tend, concatenate=False, path=_dbpath, interpolated=
         fnames.sort()
         for fname in fnames:
             ds = open_dataset(fname)
-            t = np.array([Timestamp(tn).to_pydatetime() for tn in ds['JULD'].values])
-            ftime = np.logical_and(t>tstart, t<tend)
-            if ftime.any(): # Subset of tag is in desired time.
-                ntags+=1
-                c1 = fname.split('/')
-                c1, c2 = c1[-1], c1[-3]
-                print("Loading tag " + c1 + ' ('+c2+')')
-                ds = strip_profile(ds, **kwload)
+            try:
+                t = np.array([Timestamp(tn).to_pydatetime() for tn in ds['JULD'].values])
+            except TypeError:
+                t = np.array([Timestamp(tn.year, tn.month, tn.day, tn.hour, tn.minute, tn.second).to_pydatetime() for tn in ds['JULD'].values])
+            in_time = np.logical_and(t>tstart, t<tend)
+            if in_time.any():        # Subset of tag is in desired time.
+                if bbox is not None: # Subset of tag is in desired lat/lon bounding box.
+                    lon = ds['LONGITUDE'].values
+                    lat = ds['LATITUDE'].values
+                    in_lon = np.logical_and(lon>=bbox[0], lon<=bbox[1])
+                    in_lat = np.logical_and(lat>=bbox[2], lat<=bbox[3])
+                    in_bbox = np.logical_and(in_lon, in_lat)
+                else:
+                    in_bbox = np.array([True]*in_time.size)
+                if in_bbox.any():
+                    ntags+=1
+                    c1 = fname.split('/')
+                    c1, c2 = c1[-1], c1[-3]
+                    print("Loading tag " + c1 + ' ('+c2+')')
+                    ds = strip_profile(ds, **kwload)
 
-                if concatenate: # Concatenate all matching tags in a single section.
-                    if DS is None:
-                        DS = ds
-                    else:
-                        DS = concat((DS, ds), dim='N_PROF')
-                else: # Add tag as a dictionary entry.
-                    tag = fname.split('/')[-1].split('_')[0]
-                    if DS is None:
-                        DS = {tag:ds}
-                    else:
-                        DS.update({tag:ds})
+                    # Subset data points in the tag that fall within the wanted time and bbox.
+                    dsattrs = ds.attrs
+                    inxyt = np.logical_and(in_time, in_bbox)
+                    dsvars = dict()
+                    for wvar in ds.data_vars.keys():
+                        if ds[wvar].values.ndim==2:
+                            dsnew = ds[wvar].values[inxyt, :]
+                            dsnew = Variable(('t', 'z'), dsnew)
+                        elif ds[wvar].values.ndim==1:
+                            dsnew = ds[wvar].values[inxyt]
+                            dsnew = Variable(('t'), dsnew)
+                        dsvars.update({wvar:dsnew})
+
+                    pp = ds['PRES_ADJUSTED'].values[inxyt,:]
+                    coords = dict(t=t[inxyt], p=(('t', 'z'), pp))
+                    ds = Dataset(data_vars=dsvars, coords=coords, attrs=dsattrs)
+
+                    if concatenate: # Concatenate all matching tags in a single section.
+                        if DS is None:
+                            DS = ds
+                        else:
+                            DS = concat((DS, ds), dim='t')
+                    else: # Add tag as a dictionary entry.
+                        tag = fname.split('/')[-1].split('_')[0]
+                        ds.attrs = dsattrs
+                        if DS is None:
+                            DS = {tag:ds}
+                        else:
+                            DS.update({tag:ds})
 
     print("")
-    print("Found %d tags between %s and %s."%(ntags, ts, te))
+    print("Found %d tags between %s and %s in bbox [%.1f, %.1f, %.1f, %.1f]."%(ntags, ts, te,
+                                                                               bbox[0], bbox[1],
+                                                                               bbox[2], bbox[3]))
 
     return DS
 
@@ -70,9 +100,10 @@ def strip_profile(ds, varnames=['PRES', 'TEMP', 'PSAL'], adjusted=True, qc=True,
     wanted variables, with the specified QC flags
     masked out (if qc=True).
     """
-    keep = ['JULD']
+    keep = ['JULD', 'LONGITUDE', 'LATITUDE']
     if qc:
         keep.append('JULD_QC')
+        keep.append('POSITION_QC')
     for v in varnames:
         if adjusted and v not in ['JULD']:
             v += '_ADJUSTED'
@@ -93,7 +124,10 @@ def strip_profile(ds, varnames=['PRES', 'TEMP', 'PSAL'], adjusted=True, qc=True,
         k = [a for a in ds.data_vars.keys() if '_QC' not in a]
         for v in k:
             for qctag in mask_qcflags:
-                ds[v] = ds[v].where(ds[qcarr]!=qctag)
+                try:
+                    ds[v] = ds[v].where(ds[qcarr]!=qctag)
+                except KeyError:
+                    continue
 
     if adjusted:
         presvar = 'PRES_ADJUSTED'
