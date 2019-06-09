@@ -5,3 +5,6 @@ __all__ = ['load_subset',
 
 from .read import (load_subset,
                    strip_profile)
+
+from .tools import (plt_traj,
+                    bmap)

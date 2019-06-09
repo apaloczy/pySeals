@@ -14,9 +14,14 @@ __all__ = ['load_subset',
            'strip_profile']
 
 
-def load_subset(tstart, tend, bbox=None, path='', concatenate=True, interpolated=False,
+def load_subset(tstart, tend, bbox=None, path='', concatenate=False, interpolated=False,
                 adjusted=True, qc=True, mask_qcflags=[9],
                 which_vars=['PRES', 'JULD', 'TEMP', 'PSAL']):
+    """
+    Loads a time-latitude-longitude subset of the full MEOP dataset by searching
+    for all tags that fall within the specified [tstart, tend] and
+    [lon_west, lon_east, lat_south, lat_north] limits.
+    """
     ts, te = tstart, tend
     tstart = Timestamp(tstart).to_pydatetime()
     tend = Timestamp(tend).to_pydatetime()
@@ -69,15 +74,26 @@ def load_subset(tstart, tend, bbox=None, path='', concatenate=True, interpolated
                             dsnew = Variable(('t'), dsnew)
                         dsvars.update({wvar:dsnew})
 
-                    pp = ds['PRES_ADJUSTED'].values[inxyt,:]
+                    try:
+                        pp = ds['PRES_ADJUSTED'].values[inxyt,:]
+                    except KeyError:
+                        pp = ds['PRES'].values[inxyt,:]
+                    # if interpolated:
                     coords = dict(t=t[inxyt], p=(('t', 'z'), pp))
+                    # else:
+                    #     coords = dict(t=t[inxyt])
+                    #     dsvars.update({'p':pp})
                     ds = Dataset(data_vars=dsvars, coords=coords, attrs=dsattrs)
 
                     if concatenate: # Concatenate all matching tags in a single section.
                         if DS is None:
                             DS = ds
                         else:
-                            DS = concat((DS, ds), dim='t')
+                            if interpolated:
+                                DS = concat((DS, ds), dim='t')
+                            else: # FIXME. Implement concatenation for non-interpolated data. But maybe it is not a good strategy.
+                                raise NotImplementedError
+
                     else: # Add tag as a dictionary entry.
                         tag = fname.split('/')[-1].split('_')[0]
                         ds.attrs = dsattrs
@@ -87,7 +103,10 @@ def load_subset(tstart, tend, bbox=None, path='', concatenate=True, interpolated
                             DS.update({tag:ds})
 
     print("")
-    print("Found %d tags between %s and %s in bbox [%.1f, %.1f, %.1f, %.1f]."%(ntags, ts, te,
+    if bbox is None:
+        print("Found %d tags between %s and %s."%(ntags, ts, te))
+    else:
+        print("Found %d tags between %s and %s in bbox [%.1f, %.1f, %.1f, %.1f]."%(ntags, ts, te,
                                                                                bbox[0], bbox[1],
                                                                                bbox[2], bbox[3]))
 
